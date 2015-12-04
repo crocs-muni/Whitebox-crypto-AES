@@ -314,7 +314,7 @@ int BGEAttack::deriveBset(Bset & bset, GenericAES & aes, bool permissive){
 	return 0;
 }
 
-NTL::GF2X BGEAttack::characteristicPolynomial(mat_GF2X_t m){
+NTL::GF2X BGEAttack::characteristicPolynomial(mat_GF2X_t & m){
 	// This is recursive function, so if size is 2, return result directly
 	if (m.n==1){
 		return m.x[0][0];	// should never reach this point, but lets be defensive
@@ -344,7 +344,7 @@ NTL::GF2X BGEAttack::characteristicPolynomial(mat_GF2X_t m){
 	return poly;
 }
 
-NTL::GF2X BGEAttack::characteristicPolynomial(mat_GF2 m){
+NTL::GF2X BGEAttack::characteristicPolynomial(mat_GF2 & m){
 	mat_GF2X_t subMatrix;
 	int n = m.NumRows();
 	subMatrix.n=n;
@@ -1150,7 +1150,7 @@ int BGEAttack::attack(void) {
 					cerr << "Key x=["<<x<<"] already defined in Q["<<r<<"]["<<i<<"].f["<<x<<"]"<< endl;
 				}
 				if (valSet.count(y)>0){
-					cerr << "Val y=["<<y<<"] already defined in Q["<<r<<"]["<<i<<"].f["<<x<<"]"<< endl;
+					cerr << "Val y=["<<y<<"] already defined in Q["<<r<<"]["<<i<<"].f["<<y<<"]"<< endl;
 				}
 
 				Qaffine->Q[r][i].f[x]    = y;
