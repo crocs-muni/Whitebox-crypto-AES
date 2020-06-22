@@ -35,11 +35,15 @@
 #include "WBAES.h"
 #include "WBAESGenerator.h"
 #include "BGEAttack.h"
+#include "InputObjectIstream.h"
+#include "InputObjectOstream.h"
+#include "EncTools.h"
 NTL_CLIENT
 
 #include <boost/program_options/options_description.hpp>
 #include <boost/program_options/parsers.hpp>
 #include <boost/program_options/variables_map.hpp>
+#include <boost/exception/diagnostic_information.hpp>
 namespace po = boost::program_options;
 
 using namespace std;
@@ -49,22 +53,34 @@ using namespace wbacr;
 using namespace wbacr::laeqv;
 using namespace wbacr::attack;
 
+int tryMain(int argc, const char * argv[]);
 int main(int argc, const char * argv[]) {
+	try {
+		return tryMain(argc, argv);
+	}  catch(...) {
+		std::clog << boost::current_exception_diagnostic_information() << std::endl;
+		return -1;
+	}
+}
+
+int tryMain(int argc, const char * argv[]) {
 	time_t start=0, end=0;
 	bool useExternal = false;
 	int benchgen=0;
 	int benchbge=0;
 	bool randomKey=false;
 	bool decrypt=false;
-	std::string outFile = "";
-	std::string outTables = "";
-	std::string inTables = "";
-	std::string aesKey = "";
+	bool pkcs5Padding=false;
+	bool cbc=false;
+	std::string outFile;
+	std::string outTables;
+	std::string inTables;
+	std::string aesKey;
+	std::string cbcIv;
 	unsigned char keyFromString[AES_BYTES];
+	unsigned char ivFromString[N_BYTES] = {0};
 	unsigned char * keyToUse = GenericAES::testVect128_key;
 
-	// very poor PRNG seeding, but just for now
-	srand((unsigned)time(0));
 	GF2X defaultModulus = GF2XFromLong(0x11B, 9);
 	GF2E::init(defaultModulus);
 
@@ -80,8 +96,11 @@ int main(int argc, const char * argv[]) {
 		("create-table",   po::value<std::string>(),                                       "Create encryption/decryption tables")
 		("create-random",  po::value<bool>()->default_value(false)->implicit_value(false), "Create tables with random key")
 		("use-key",        po::value<std::string>(),                                       "Create encryption/decryption with given hex-coded key")
+		("use-iv",         po::value<std::string>(),                                       "Use CBC with given hex-coded IV")
 		("load-tables",    po::value<std::string>(),                                       "Loads encryption/decryption tables from given file")
-		("decrypt",        po::value<bool>()->default_value(false)->implicit_value(false), "Should perfom encryption or decryption")
+		("decrypt",        po::value<bool>()->default_value(false)->implicit_value(false), "Should perform encryption or decryption")
+		("pkcs5",          po::value<bool>()->default_value(false)->implicit_value(false), "Enables PKCS5 padding")
+		("cbc",            po::value<bool>()->default_value(false)->implicit_value(false), "Uses CBC mode")
 		("version,v",                                                                      "Display the version number");
 
 
@@ -111,6 +130,7 @@ int main(int argc, const char * argv[]) {
 	if (vm.count("load-tables")){
 		inTables = vm["load-tables"].as<std::string>();
 		std::cout << "Table input file given: " << inTables << endl;
+		keyToUse = nullptr;
 	}
 
 	if (vm.count("use-key")){
@@ -125,29 +145,45 @@ int main(int argc, const char * argv[]) {
 		keyToUse = keyFromString;
 	}
 
-	// use random key?
-	randomKey = vm["create-random"].as<bool>();
-	if (randomKey){
-		for(int i=0; i<AES_BYTES; i++){
-			keyFromString[i] = rand() % 0x100;
+	if (vm.count("use-iv")){
+		cbcIv = vm["use-iv"].as<std::string>();
+		size_t bytes = hexstr2bin(cbcIv, (char*)ivFromString, N_BYTES);
+
+		if (bytes != N_BYTES){
+			std::cerr << "Invalid AES IV size, expected " << N_BYTES << " bytes" << std::endl;
+			return -1;
 		}
 
 		keyToUse = keyFromString;
 	}
 
-	std::cout << "AES key to use: ";
-	dumpArray(std::cout, (char *)keyToUse, AES_BYTES);
-	std::cout << std::endl;
+	// use random key?
+	randomKey = vm["create-random"].as<bool>();
+	if (randomKey){
+		for(int i=0; i<AES_BYTES; i++){
+			keyFromString[i] = (unsigned char)(phrand() % 0x100);
+		}
+
+		keyToUse = keyFromString;
+	}
+
+    if (keyToUse != nullptr){
+	    std::cout << "AES key to use: ";
+	    dumpArray(std::cout, (char *)keyToUse, AES_BYTES);
+	    std::cout << std::endl;
+	}
 
     // use external coding ?
     useExternal = vm["extEnc"].as<bool>();
     decrypt = vm["decrypt"].as<bool>();
+    pkcs5Padding = vm["pkcs5"].as<bool>();
+	cbc = vm["cbc"].as<bool>();
 
     //
     // AES generator benchmark
     //
     benchgen = vm["bench-gen"].as<int>();
-    if (benchgen > 0){
+    if (benchgen > 0 && keyToUse != nullptr){
     	cout << "Benchmark of the WB-AES generator is starting..." << endl;
 
     	//
@@ -165,7 +201,7 @@ int main(int argc, const char * argv[]) {
 		cout << "Going to compute tables. Benchmark will iterate " << benchgen << " times" << endl;
 		time(&start);
 
-		WBAES * genAES = new WBAES;
+		auto * genAES = new WBAES;
 		for(int i=0; i<benchgen; i++){
 			generator.generateTables(keyToUse, KEY_SIZE_16, genAES, &coding, true);
 			generator.generateTables(keyToUse, KEY_SIZE_16, genAES, &coding, false);
@@ -184,7 +220,7 @@ int main(int argc, const char * argv[]) {
 	//BGE benchmark
 	//
     benchbge = vm["bench-bge"].as<int>();
-    if (benchbge > 0){
+    if (benchbge > 0 && keyToUse != nullptr){
     	cout << "Benchmark of the BGE attack is starting..." << endl;
 
     	//
@@ -208,9 +244,9 @@ int main(int argc, const char * argv[]) {
 
 		cout << "Going to generate AES tables to crack ..." << endl;
 
-		WBAES     * genAES = new WBAES;
-		WBAES     * tmpAES = new WBAES;
-		BGEAttack * atk = new BGEAttack;
+		auto * genAES = new WBAES;
+		auto * tmpAES = new WBAES;
+		auto * atk = new BGEAttack;
 
 		clock_t pstart, pend;
 		clock_t pacc = 0;
@@ -256,7 +292,7 @@ int main(int argc, const char * argv[]) {
 	//
 	// Create tables & dump to a file
 	//
-	if (vm.count("create-table")){
+	if (vm.count("create-table") && keyToUse != nullptr){
 		outTables = vm["create-table"].as<std::string>();
 		std::cout << "Table output file given: " << outTables << endl;
 
@@ -264,7 +300,7 @@ int main(int argc, const char * argv[]) {
 		defAES.init(0x11B, 0x03);
 
 		WBAESGenerator generator;
-		WBAES * genAES = new WBAES;
+		auto * genAES = new WBAES;
 
 		cout << "External coding will be used: " << useExternal << endl;
 		ExtEncoding coding;
@@ -278,7 +314,7 @@ int main(int argc, const char * argv[]) {
 		time(&end);
 		cout << "Generating AES tables took: ["<<(end-start)<<"] seconds" << endl;
 
-		genAES->save(outTables.c_str());
+		generator.save(outTables.c_str(), genAES, &coding);
 	}
 
     //
@@ -286,7 +322,7 @@ int main(int argc, const char * argv[]) {
     //
 	if(vm.count("input-files")){
 		std::vector<std::string>  files = vm["input-files"].as<std::vector<std::string>>();
-		for(std::string file : files){
+		for(const std::string &file : files){
 			std::cout << "Input file " << file << std::endl;
 		}
 
@@ -297,24 +333,23 @@ int main(int argc, const char * argv[]) {
 		defAES.init(0x11B, 0x03);
 
 		WBAESGenerator generator;
-		WBAES * genAES = new WBAES;
+		auto * genAES = new WBAES;
 		ExtEncoding coding;
-
-		cout << "External coding will be used: " << useExternal << endl;
+		// Generate new encoding.
+		cout << "Generating External encoding, identity: " << useExternal << "..." << endl;
 		generator.generateExtEncoding(&coding, useExternal ? 0 : WBAESGEN_EXTGEN_ID);
 
-		if (inTables.empty()) {
+		if (inTables.empty() && keyToUse != nullptr) {
 			cout << "Generating WB-AES instance..." << endl;
 			time(&start);
 			generator.generateTables(keyToUse, KEY_SIZE_16, genAES, &coding, true);
 			generator.generateTables(keyToUse, KEY_SIZE_16, genAES, &coding, false);
 			time(&end);
 			cout << "Generating AES tables took: [" << (end - start) << "] seconds" << endl;
-
 		} else {
 			cout << "Loading stored AES tables: " << useExternal << endl;
 			time(&start);
-			genAES->load(inTables.c_str());
+			generator.load(inTables.c_str(), genAES, &coding);
 			time(&end);
 			cout << "Loading AES tables took: [" << (end - start) << "] seconds" << endl;
 		}
@@ -322,6 +357,7 @@ int main(int argc, const char * argv[]) {
 		// open the given file
 		std::string fileName = files[0];
 		cout << "Going to " << (decrypt ? "decrypt":"encrypt") << " file ["<<fileName<<"] with WBAES" << endl;
+		cout << "External coding: " << useExternal << ", PKCS5 padding: " << pkcs5Padding << ", CBC: " << cbc << endl;
 
 		bool writeOut = !outFile.empty();
 		ofstream out;
@@ -330,92 +366,27 @@ int main(int argc, const char * argv[]) {
 		}
 
 		// Open reading file
-		ifstream inf(fileName.c_str(), ios::in | ios::binary | ios::ate);
-		if (inf.is_open()==false){
+		ifstream inf(fileName.c_str(), ios::in | ios::binary);
+		if (!inf.is_open()){
 			cerr << "Cannot open specified input file" << endl;
 			exit(3);
 		}
 
-		// read the file
-		const int buffSize       = 4096;
-		const long int iters     = buffSize / N_BYTES;
-		unsigned long long blockCount = 0;
-		char * memblock          = new char[buffSize];
-		char blockbuff[N_BYTES];
+        InputObjectIstream<BYTE> iois(&inf);
+        InputObjectOstream<BYTE> ioos(&out);
 
-		ifstream::pos_type size;
-		// get file size - ios::ate => we are at the end of the file
-		size = inf.tellg();
-		// move on the beginning
-		inf.seekg(0, ios::beg);
+        time_t cacc=0;
+        clock_t pacc = 0;
+        EncTools::processData(decrypt, genAES, &generator, &iois, writeOut ? &ioos : nullptr, &coding, pkcs5Padding,
+                              cbc, ivFromString, &cacc, &pacc);
 
-		// time measurement of just the cipher operation
-		time_t cstart, cend;
-		time_t cacc=0;
-
-		clock_t pstart, pend;
-		clock_t pacc = 0;
-
-		// measure the time here
-		time(&start);
-		do {
-			streamsize bRead;
-
-			// read data from the file to the buffer
-			inf.read(memblock, buffSize);
-			bRead = inf.gcount();
-			if (inf.bad()) {
-				std::cout << "badBit. Bytes read:" << bRead << " could be read";
-				break;
-			}
-
-			// here we have data in the buffer - lets encrypt them
-			W128b state;
-			long int iter2comp = min(iters, (long int) ceil((float)bRead / N_BYTES));
-
-			for(int k = 0; k < iter2comp; k++, blockCount++){
-				arr_to_W128b(memblock, k * 16UL, state);
-
-				// encryption
-				if (useExternal) generator.applyExternalEnc(state, &coding, true);
-
-				time(&cstart);
-				pstart = clock();
-				if (decrypt){
-					genAES->decrypt(state);
-				} else {
-					genAES->encrypt(state);
-				}
-
-				pend = clock();
-				time(&cend);
-
-				cacc += (cend - cstart);
-				pacc += (pend - pstart);
-
-				if (useExternal) generator.applyExternalEnc(state, &coding, false);
-
-				// if wanted, store to file
-				if (writeOut){
-					W128b_to_arr(blockbuff, 0, state);
-					out.write(blockbuff, N_BYTES);
-				}
-			}
-
-			if (inf.eof()){
-				cout << "Finished reading the file " << endl;
-				break;
-			}
-		} while(true);
 		time(&end);
-
 		time_t total = end-start;
 		cout << "Encryption ended in ["<<total<<"]s; Pure encryption took ["<<((float) pacc / CLOCKS_PER_SEC)
-					<<"] s (clock call); time: ["<<cacc<<"] s; encrypted ["<<blockCount<<"] blocks" << endl;
+					<<"] s (clock call); time: ["<<cacc<<"] s; " << endl;
 
 		// free allocated memory
 		delete genAES;
-		delete[] memblock;
 		// close reading file
 		inf.close();
 		// close output writing file
@@ -424,173 +395,7 @@ int main(int argc, const char * argv[]) {
 			out.close();
 		}
 	}
-}
-
-int A1A2relationsGenerator(void){
-	// very poor PRNG seeding, but just for now
-	srand((unsigned)time(0));
-	GF2X defaultModulus = GF2XFromLong(0x11B, 9);
-	GF2E::init(defaultModulus);
-
-	ofstream dump;
-	ofstream dumpA;
-	dump.open("/media/share/AES_A1A2dump.txt");
-	dumpA.open("/media/share/AES_signature.txt");
-
-
-	dump  << "polynomial;generator;qq;ii;problems;A1;A2" << endl;
-	dumpA << "polynomial;generator;sbox;sboxinv;mixcol;mixcolinv" << endl;
-
-	GenericAES defAES;
-	defAES.init(0x11B, 0x03);
-	defAES.printAll();
-
-	int AES_gen, AES_poly;
-	for(AES_poly=0; AES_poly < AES_IRRED_POLYNOMIALS; AES_poly++){
-		for(AES_gen=0; AES_gen < AES_GENERATORS; AES_gen++){
-			GenericAES dualAES;
-			dualAES.initFromIndex(AES_poly, AES_gen);
-
-			// write to file
-			dumpA   << CHEX(GenericAES::irreduciblePolynomials[AES_poly]) << ";"
-					<< CHEX(GenericAES::generators[AES_poly][AES_gen]) << ";";
-			dumpVector(dumpA, dualAES.sboxAffineGF2E, 256); dumpA << ";";
-			dumpVector(dumpA, dualAES.sboxAffineInvGF2E, 256); dumpA << ";";
-			dumpMatrix(dumpA, dualAES.mixColMat); dumpA << ";";
-			dumpMatrix(dumpA, dualAES.mixColInvMat); dumpA << ";";
-			dumpA << endl;
-			dumpA.flush();
-
-			cout << "+";
-			int ii=0,qq=0,probAll=0;
-			for(qq=0;qq<8; qq++){
-				cout << ".";
-				for(ii=1;ii<256;ii++){
-					int problems=0;
-					vec_GF2E A1;
-					vec_GF2E A2;
-					dualAES.generateA1A2Relations(A1, A2, ii, qq);
-					problems = dualAES.testA1A2Relations(A1, A2);
-
-					// write to file
-					dump    << CHEX(GenericAES::irreduciblePolynomials[AES_poly]) << ";"
-							<< CHEX(GenericAES::generators[AES_poly][AES_gen]) << ";"
-							<< qq << ";" << ii << ";" << problems << ";";
-					dumpVector(dump, A1);
-					dump << ";";
-					dumpVector(dump, A2);
-					dump << endl;
-
-					if (problems>0){
-						cout << "Current Dual AES: "
-								<< CHEX(GenericAES::irreduciblePolynomials[AES_poly]) << ";"
-								<< CHEX(GenericAES::generators[AES_poly][AES_gen]) << endl;
-						cout << "Problem with relations ii="<<ii<<"; qq="<<qq<<"; problems=" << problems << endl;
-						probAll+=1;
-					}
-				}
-			}
-
-			// force write
-			dump.flush();
-		}
-	}
-
-	dumpA.close();
-	dump.close();
-	return 0;
-}
-
-int dualAESTest(void){
-	// very poor PRNG seeding, but just for now
-	srand((unsigned)time(0));
-	GF2X defaultModulus = GF2XFromLong(0x11B, 9);
-	GF2E::init(defaultModulus);
-
-	GenericAES defAES;
-	defAES.init(0x11B, 0x03);
-	defAES.printAll();
-	defAES.testWithVectors();
-
-	GenericAES dualAES;
-	dualAES.init(0x11D, 0x9d);
-	//dualAES.initFromIndex(15,5);
-	dualAES.printAll();
-	dualAES.testWithVectors();
-
-	// try round key expansion
-	vec_GF2E roundKey;
-	vec_GF2E key;
-	key.SetLength(128);
-	dualAES.expandKey(roundKey, key, KEY_SIZE_16);
-	cout << "Round key for ZERO key for 16B: " << endl;
-	dumpVector(roundKey);
-
-	mat_GF2E state(INIT_SIZE, 4, 4);
-	cout << "Plaintext: " << endl;
-	dumpMatrix(state);
-
-	cout << "Testing encryption: " << endl;
-	dualAES.encryptInternal(state, roundKey);
-	dumpMatrix(state);
-
-	dualAES.applyTinv(state);
-	cout << "Testing encryption AFTER Tinv: " << endl;
-	dumpMatrix(state);
-
-	dualAES.applyT(state);
-	cout << "Testing backward decryption: " << endl;
-	dualAES.decryptInternal(state, roundKey);
-	dumpMatrix(state);
-
-	cout << "Multiplication matrix: " << endl;
-	mat_GF2 multA= dualAES.makeMultAMatrix(2);
-	dumpMatrix(multA);
-
-	cout << "Squaring matrix: " << endl;
-	mat_GF2 sqr = dualAES.makeSquareMatrix(1);
-	dumpMatrix(sqr);
-
-
-	cout << "A1 and A2 relations, testing all possible" << endl;
-	int ii=0,qq=0,probAll=0;
-	for(qq=0;qq<8; qq++){
-		for(ii=1;ii<256;ii++){
-			int problems=0;
-			vec_GF2E A1;
-			vec_GF2E A2;
-			dualAES.generateA1A2Relations(A1, A2, ii, qq);
-			problems = dualAES.testA1A2Relations(A1, A2);
-
-			if (problems>0){
-				cout << "Problem with relations ii="<<ii<<"; qq="<<qq<<"; problems=" << problems << endl;
-				probAll+=1;
-			}
-		}
-	}
-
-	cout << "All relations tested, problemsAll = " << probAll << endl;
-
-	vec_GF2E A1;
-	vec_GF2E A2;
-	dualAES.generateA1A2Relations(A1, A2, 1+(rand() % 0xfe), rand() % 7);
-	cout << "Testing relations A1 A2: Problems = " << dualAES.testA1A2Relations(A1, A2) << endl;
-
-	cout << "A1: " << endl;
-	dumpVector(A1);
-
-	cout << "A2: " << endl;
-	dumpVector(A2);
-
-	cout << "Generating random bijections: " << endl;
-	vec_GF2X rndB;
-	vec_GF2X rndBinv;
-	generateRandomBijection(rndB, rndBinv, AES_FIELD_SIZE, AES_FIELD_DIM);
-	dumpVector(rndB);
-	dumpVector(rndBinv);
 
 	return 0;
 }
-
-
 

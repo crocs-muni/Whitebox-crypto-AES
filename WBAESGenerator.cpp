@@ -312,6 +312,7 @@ void WBAESGenerator::generateExtEncoding(ExtEncoding * extc, int flags){
 			ident(extc->IODM[k].inv, 128);
 		}
 	}
+	extc->flags = flags;
 }
 
 void WBAESGenerator::generateT1Tables(WBAES * genAES, ExtEncoding * extc, bool encrypt){
@@ -416,10 +417,10 @@ void WBAESGenerator::generateTables(BYTE *key, enum keySize ksize, WBAES * genAE
 	defaultAES.expandKey(expandedKey, defaultKey, ksize);	// key schedule for default AES
 	backupKey = expandedKey;								// backup default AES expanded key for test routine
 	for(i=0; i<N_ROUNDS * N_SECTIONS; i++){
-		int rndPolynomial = useDualAESIdentity ? 0 : rand() % AES_IRRED_POLYNOMIALS;
-		int rndGenerator  = useDualAESIdentity ? 0 : rand() % AES_GENERATORS;
-		genA[i]			  = useDualAESARelationsIdentity ? 1 : (rand() % 255) + 1;
-		genI[i]			  = useDualAESARelationsIdentity ? 0 : rand() % 8;
+		int rndPolynomial = useDualAESIdentity ? 0 : phrand() % AES_IRRED_POLYNOMIALS;
+		int rndGenerator  = useDualAESIdentity ? 0 : phrand() % AES_GENERATORS;
+		genA[i]			  = useDualAESARelationsIdentity ? 1 : (phrand() % 255) + 1;
+		genI[i]			  = useDualAESARelationsIdentity ? 0 : phrand() % 8;
 		if (useDualAESSimpeAlternate && !useDualAESIdentity){
 			rndPolynomial = (i)%2 == 0 ? 0: AES_IRRED_POLYNOMIALS-1;
 			rndGenerator  = (i)%2 == 0 ? 0: AES_GENERATORS-1;
@@ -774,7 +775,7 @@ void WBAESGenerator::generateTables(BYTE *key, enum keySize ksize, WBAES * genAE
 					iocoding_encode32x32(mapResult, mapResult, codingMap_edT3[r][i][j], false, pCoding04x04, pCoding08x08);
 					// Store result value to lookup table
 					genAES_edTab3[r][i*4+j][b] = mapResult;
-// cout << "T3["<<r<<"]["<<i<<"]["<<j<<"]["<<b<<"] = "; dumpW32b(mapResult);
+					// cout << "T3["<<r<<"]["<<i<<"]["<<j<<"]["<<b<<"] = "; dumpW32b(mapResult);
 				}
 			}
 
@@ -890,13 +891,13 @@ int WBAESGenerator::generate8X8Bijection(BIJECT8X8 *biject, BIJECT8X8 *invBiject
 	}
 }
 
-int WBAESGenerator::testWithVectors(bool coutOutput, WBAES * genAES){
+int WBAESGenerator::testWithVectors(bool coutOutput, WBAES * genAES, int extCodingFlags){
 	// generate table implementation for given key
 	ExtEncoding extc;
 
 	//
 	// Demonstrate also use of external encodings in practice
-	generateExtEncoding(&extc,0); //WBAESGEN_EXTGEN_fCID | WBAESGEN_EXTGEN_lCID |  WBAESGEN_EXTGEN_IDMID|   WBAESGEN_EXTGEN_lCID  WBAESGEN_EXTGEN_ODMID
+	generateExtEncoding(&extc, extCodingFlags);
 	if (coutOutput){
 		cout << "Generating table implementation for testvector key: " << endl;
 		dumpVectorT(GenericAES::testVect128_key, 16);
@@ -968,6 +969,20 @@ void WBAESGenerator::applyExternalEnc(W128b& state, ExtEncoding * extc, bool inp
 	}
 }
 
+void WBAESGenerator::applyExternalEnc(BYTE * state, ExtEncoding * extc, bool input, size_t numBlocks){
+    if (state == nullptr || extc == nullptr){
+        return;
+    }
+
+    W128b aesState{};
+
+	for(int idx = 0; idx < numBlocks; ++idx) {
+		arr_to_W128b(state, static_cast<size_t>(idx * N_BYTES), aesState);
+		applyExternalEnc(aesState, extc, input);
+		W128b_to_arr((char *) state, static_cast<size_t>(idx * N_BYTES), aesState);
+	}
+}
+
 int WBAESGenerator::testComputedVectors(bool coutOutput, WBAES * genAES, ExtEncoding * extc){
 	int i, err=0;
 
@@ -977,7 +992,7 @@ int WBAESGenerator::testComputedVectors(bool coutOutput, WBAES * genAES, ExtEnco
 	}
 
 	for(i=0; i<AES_TESTVECTORS; i++){
-		W128b plain, cipher, state;
+		W128b plain{}, cipher{}, state{};
 		arr_to_W128b(GenericAES::testVect128_plain[i], 0, plain);
 		arr_to_W128b(GenericAES::testVect128_plain[i], 0, state);
 		arr_to_W128b(GenericAES::testVect128_cipher[i], 0, cipher);
@@ -1004,6 +1019,9 @@ int WBAESGenerator::testComputedVectors(bool coutOutput, WBAES * genAES, ExtEnco
 		} else {
 			err++;
 			if (coutOutput) cout << "[ ERROR ]:  Enc(plaintext) != ciphertext_test" << endl;
+#			ifdef FAIL
+            FAIL() << "[ ERROR ]:  Enc(plaintext) != ciphertext_test";
+#			endif
 		}
 
 		applyExternalEnc(state, extc, true);
@@ -1019,6 +1037,9 @@ int WBAESGenerator::testComputedVectors(bool coutOutput, WBAES * genAES, ExtEnco
 		} else {
 			err++;
 			if (coutOutput) cout << "[ ERROR ]:  Dec(Enc(plaintext)) != plaintext_test" << endl;
+#			ifdef FAIL
+			FAIL() << "[ ERROR ]:  Dec(Enc(plaintext)) != plaintext_test";
+#			endif
 		}
 
 		if (coutOutput){
@@ -1027,4 +1048,63 @@ int WBAESGenerator::testComputedVectors(bool coutOutput, WBAES * genAES, ExtEnco
 	}
 
 	return err;
+}
+
+int WBAESGenerator::save(const char * filename, WBAES * aes, ExtEncoding * extCoding){
+#ifdef WBAES_BOOST_SERIALIZATION
+	std::ofstream ofs(filename);
+	int code = save(ofs, aes, extCoding);
+	ofs.close();
+
+	return code;
+#else
+	cerr << "WBAESGenerator::save: Boost is not enabled, use WBAES_BOOST_SERIALIZATION" << endl;
+	return -1;
+#endif
+}
+
+int WBAESGenerator::load(const char * filename, WBAES * aes, ExtEncoding * extCoding){
+#ifdef WBAES_BOOST_SERIALIZATION
+	std::ifstream ifs(filename);
+	int code = load(ifs, aes, extCoding);
+	ifs.close();
+	return code;
+#else
+	cerr << "WBAESGenerator::load: Boost is not enabled, use WBAES_BOOST_SERIALIZATION" << endl;
+	return -1;
+#endif
+}
+
+int WBAESGenerator::save(ostream& out, WBAES * aes, ExtEncoding * extCoding){
+#ifdef WBAES_BOOST_SERIALIZATION
+	boost::archive::binary_oarchive oa(out);
+	if (aes) {
+		aes->save(oa);
+	}
+	if (extCoding) {
+		oa << *extCoding;
+	}
+
+	return 0;
+#else
+	cerr << "WBAESGenerator::save: Boost is not enabled, use WBAES_BOOST_SERIALIZATION" << endl;
+	return -1;
+#endif
+}
+
+int WBAESGenerator::load(istream& ins, WBAES * aes, ExtEncoding * extCoding){
+#ifdef WBAES_BOOST_SERIALIZATION
+	boost::archive::binary_iarchive ia(ins);
+	if (aes) {
+		aes->load(ia);
+	}
+	if (extCoding){
+		ia >> *extCoding;
+	}
+
+	return 0;
+#else
+	cerr << "WBAESGenerator::load: Boost is not enabled, use WBAES_BOOST_SERIALIZATION" << endl;
+	return -1;
+#endif
 }

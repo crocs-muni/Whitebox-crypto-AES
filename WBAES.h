@@ -89,8 +89,6 @@ typedef union _W128B{
     BYTE B[16];
     unsigned int l[4];
 } W128b;
-// let boost serialize also _W128B (eXTabEx and eTab1 MUST be saved as well)
-BOOST_CLASS_IMPLEMENTATION(_W128B,boost::serialization::object_serializable);
 
 // XOR table is 8b->4b mapping. Thus simple array of size 2^8=256 with type BYTE.
 // 4bit type would be enough, but smallest possible is char, thus 8.
@@ -272,6 +270,11 @@ public:
 	int load(const char * filename);
     int save(ostream& out);
     int load(istream& ins);
+#ifdef WBAES_BOOST_SERIALIZATION
+    int save(boost::archive::binary_oarchive& out);
+    int load(boost::archive::binary_iarchive& ins);
+#endif
+
     std::string save();
     int loadString(std::string serialized);
 
@@ -379,8 +382,9 @@ template<class Archive> inline void serialize(Archive &ar, union _W128B &i, cons
    ar & i.l[3];
 }}}
 
-BOOST_CLASS_IMPLEMENTATION(union _W32B ,boost::serialization::object_serializable);
-BOOST_CLASS_IMPLEMENTATION(union _W128 ,boost::serialization::object_serializable);
+BOOST_CLASS_IMPLEMENTATION(union _W128B, boost::serialization::object_serializable);
+BOOST_CLASS_IMPLEMENTATION(union _W32B, boost::serialization::object_serializable);
+BOOST_CLASS_IMPLEMENTATION(union _W128, boost::serialization::object_serializable);
 BOOST_CLASS_IMPLEMENTATION(WBAES, boost::serialization::object_serializable);
 #endif
 #endif /* WBAES_H_ */

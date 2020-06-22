@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <fstream>
+#include <stdexcept>
 #include <boost/io/ios_state.hpp>
 
 NTL_CLIENT
@@ -46,6 +47,7 @@ void dumpVector(NTL::vec_GF2E& a){
 
 void dumpVector(NTL::vec_GF2X& a){
 	unsigned int i, len = a.length();
+	boost::io::ios_flags_saver ifs(cout);
 	for (i=0; i<len; i++){
 		cout << " " << GF2EHEX(a[i]) << " ";
 		if (((i+1) % 16) == 0) cout << endl;
@@ -55,6 +57,7 @@ void dumpVector(NTL::vec_GF2X& a){
 
 void dumpVector(NTL::vec_GF2& a){
 	unsigned int i, len = a.length();
+	boost::io::ios_flags_saver ifs(cout);
 	for (i=0; i<len; i++){
 		cout << " " << a[i] << " ";
 		if (((i+1) % 16) == 0) cout << endl;

@@ -374,11 +374,12 @@ int LinearAffineEq::findAffineEquivalences(bsetElem * S1t,   bsetElem * S1invt,
 	unordered_set<std::string> hashes;
 	unsigned long int total = 0;
 	bsetElem a,b,i;
+	bool failed = false;
 
-	for(a=0; a<size; a++){
+	for(a=0; a<size && !failed; a++){
 		if (verbosityAffine) cout << "+++++++++++++++++++++++++++++ @@[ " << a << "]" << endl;
 
-		for(b=0; b<size; b++){
+		for(b=0; b<size && !failed; b++){
 			if (verbosityAffine){
 				time_t  tt;
 				struct tm * now = localtime(&tt);
@@ -473,7 +474,10 @@ int LinearAffineEq::findAffineEquivalences(bsetElem * S1t,   bsetElem * S1invt,
 				// if any callback defined
 				if (callback!=NULL){
 					int partResult = callback(&lElem, list, &hashes, this, usrData);
-					if (partResult==-1) return hashes.size();
+					if (partResult==-1) {
+						failed = true;
+						break;
+					}
 				}
 
 				if (list!=NULL){
@@ -500,7 +504,7 @@ int LinearAffineEq::findAffineEquivalences(bsetElem * S1t,   bsetElem * S1invt,
 	delete[] S1inv;
 	delete[] S2inv;
 
-	if (verbosityAffine){
+	if (verbosityAffine && !failed){
 		cout << "Total affine relations: " << total << endl;
 		cout << "Total unique affine relations: " << hashes.size() << endl;
 	}
@@ -609,7 +613,7 @@ int LinearAffineEq::findLinearEquivalences(bsetElem * S1,   bsetElem * S1inv,
 				// Chose new X and pick value for it
 				// Keep in mind linearity of mapping, so avoid duplicities.
 				if (randomizeXGuess){
-					int rnd = rand() % Ua.size();
+					int rnd = phrand() % Ua.size();
 					it1 = Ua.begin(); for(i=0; i<rnd; ++i, ++it1);
 					x = *it1; Ua.erase(it1);
 					Na.insert(x);

@@ -3,11 +3,7 @@ language: cpp
 
 # Use container based infrastructure for Travis
 sudo: false
-
-# Test against both compilers
-compiler:
-  - clang
-  - gcc
+dist: bionic
 
 cache:
   directories:
@@ -26,23 +22,113 @@ addons:
     sources:
     - ubuntu-toolchain-r-test
     - boost-latest
-    - george-edison55-precise-backports
     packages:
     - build-essential
     - autoconf
     - cmake
     - cmake-data
-    - libboost-program-options1.55-dev
-    - libboost-serialization1.55-dev
-    - libboost-iostreams1.55-dev
+    - libboost-program-options1.58-dev
+    - libboost-serialization1.58-dev
+    - libboost-iostreams1.58-dev
+    - libboost-random1.58-dev
   coverity_scan:
       project:
         name: "ph4r05/Whitebox-crypto-AES"
-        description: "<Your project description here>"
+        description: "AES Whitebox implementation"
       notification_email: ph4r05@gmail.com
       build_command_prepend: bash install-ntl-cached.sh
       build_command:   bash build.sh
       branch_pattern: coverity_scan
+
+matrix:
+  include:
+    # works on Precise and Trusty
+    - os: linux
+      dist: xenial
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - boost-latest
+          packages:
+            - g++-4.9
+            - build-essential
+            - autoconf
+            - cmake
+            - cmake-data
+            - libboost-program-options1.58-dev
+            - libboost-serialization1.58-dev
+            - libboost-iostreams1.58-dev
+            - libboost-random1.58-dev
+      env:
+         - MATRIX_EVAL="CC=gcc-4.9 && CXX=g++-4.9"
+
+    # works on Precise and Trusty
+    - os: linux
+      dist: xenial
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - boost-latest
+          packages:
+            - g++-7
+            - build-essential
+            - autoconf
+            - cmake
+            - cmake-data
+            - libboost-program-options1.58-dev
+            - libboost-serialization1.58-dev
+            - libboost-iostreams1.58-dev
+            - libboost-random1.58-dev
+      env:
+        - MATRIX_EVAL="CC=gcc-7 && CXX=g++-7"
+
+    # works on Precise and Trusty
+    - os: linux
+      dist: xenial
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+            - llvm-toolchain-precise-3.6
+            - boost-latest
+          packages:
+            - clang-3.6
+            - build-essential
+            - autoconf
+            - cmake
+            - cmake-data
+            - libboost-program-options1.58-dev
+            - libboost-serialization1.58-dev
+            - libboost-iostreams1.58-dev
+            - libboost-random1.58-dev
+      env:
+        - MATRIX_EVAL="CC=clang-3.6 && CXX=clang++-3.6"
+
+    # works on Trusty
+    - os: linux
+      dist: xenial
+      addons:
+        apt:
+          sources:
+            - llvm-toolchain-xenial-6.0
+            - boost-latest
+          packages:
+            - clang-6.0
+            - build-essential
+            - autoconf
+            - cmake
+            - cmake-data
+            - libboost-program-options1.58-dev
+            - libboost-serialization1.58-dev
+            - libboost-iostreams1.58-dev
+            - libboost-random1.58-dev
+      env:
+        - MATRIX_EVAL="CC=clang-5.0 && CXX=clang++-5.0"
+
+before_install:
+    - eval "${MATRIX_EVAL}"
 
 before_install:
   - echo $LANG
@@ -53,4 +139,9 @@ script:
   - ls -las
   - ls -las $HOME/ntl
   - bash build.sh
-
+  - ls -las
+  - ./gtesting
+  - ./main --create-table /tmp/aes-table --extEnc=0
+  - ./main --load-tables /tmp/aes-table --extEnc=0 --input-files /tmp/aes-table --pkcs5=1 --cbc=1 -o /tmp/aes-table.enc
+  - ./main --load-tables /tmp/aes-table --extEnc=0 --input-files /tmp/aes-table.enc --pkcs5=1 --cbc=1 -o /tmp/aes-table.dec --decrypt=1
+  - diff /tmp/aes-table /tmp/aes-table.dec

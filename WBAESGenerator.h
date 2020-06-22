@@ -28,6 +28,23 @@
 #include "WBAES.h"
 #include "MixingBijections.h"
 
+#ifdef WBAES_BOOST_SERIALIZATION
+#include <cstddef> // NULL
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <boost/archive/tmpdir.hpp>
+#include <boost/archive/text_iarchive.hpp>
+#include <boost/archive/text_oarchive.hpp>
+#include <boost/archive/binary_iarchive.hpp>
+#include <boost/archive/binary_oarchive.hpp>
+#include <boost/serialization/base_object.hpp>
+#include <boost/serialization/utility.hpp>
+#include <boost/serialization/list.hpp>
+#include <boost/serialization/assume_abstract.hpp>
+#include <boost/serialization/split_free.hpp>
+#endif
+
 #define NO_CODING           0x00000000  // IDENTITY CODING
 #define UNASSIGNED_CODING   0xFFFFFFFF  // INVALID CODING
 #define UNUSED_CODING       0xFFFFFFFE  // This coding is not in use (XOR tables use only lower 4 bits for result)
@@ -167,6 +184,7 @@ typedef struct _W08x128Coding {
 typedef struct _ExtEncoding {
 	CODING4X4_TABLE lfC[2][2*N_BYTES];		// 0=>first input round bijection, 1=>last output round bijection
 	MB128x128_TABLE IODM[2];                // 128 x 128 GF(2) matrix, input, output mixing bijection
+	int flags = 0;							// flags the structure was created with
 } ExtEncoding;
 
 #define WBAESGEN_EXTGEN_fCID 1          // lfC[0]  in ExtEncoding will be identity
@@ -511,6 +529,7 @@ public:
 	//
 	// Applies external encoding - after this, state can be passed to WB AES using this external encoding
 	void applyExternalEnc(W128b& state, ExtEncoding * extc, bool input);
+	void applyExternalEnc(BYTE* state, ExtEncoding * extc, bool input, size_t numBlocks = 1);
 
 	//
 	// Raw method for generating random bijections
@@ -520,7 +539,7 @@ public:
 	int generate8X8Bijection(BIJECT8X8 *biject, BIJECT8X8 *invBiject, bool identity=false);
  	
 	// test whitebox implementation with test vectors
-	int testWithVectors(bool coutOutput, WBAES * genAES);
+	int testWithVectors(bool coutOutput, WBAES * genAES, int extCodingFlags = 0);
 	int testComputedVectors(bool coutOutput, WBAES * genAES, ExtEncoding * extc);
 
 	inline void BYTEArr_to_vec_GF2E(const BYTE * arr, size_t len, NTL::vec_GF2E& dst){
@@ -607,7 +626,100 @@ public:
 				dst.B[i] = iocoding_encode08x08(src.B[i], coding.OC[i], encodeInput, tbl4, tbl8);
 			}
 		}
-}
+	}
+
+	int save(const char * filename, WBAES * aes, ExtEncoding * extCoding);
+	int load(const char * filename, WBAES * aes, ExtEncoding * extCoding);
+	int save(ostream& out, WBAES * aes, ExtEncoding * extCoding);
+	int load(istream& ins, WBAES * aes, ExtEncoding * extCoding);
 };
+
+#ifdef WBAES_BOOST_SERIALIZATION
+// serialization functions
+// CODING4X4_TABLE
+namespace boost{ namespace serialization {
+		template<class Archive> inline void serialize(Archive &ar, struct _CODING4X4_TABLE &i, const unsigned version){
+			ar & i.coding;
+			ar & i.invCoding;
+		}}}
+
+// MB_TABLE
+namespace boost{ namespace serialization {
+		template<class Archive> inline void serialize(Archive &ar, struct _MB_TABLE &i, const unsigned version){
+			ar & i.mb;
+			ar & i.inv;
+		}}}
+
+// ExtEncoding
+namespace boost{ namespace serialization {
+		template<class Archive> inline void serialize(Archive &ar, struct _ExtEncoding &i, const unsigned version){
+			ar & i.IODM[0];
+			ar & i.IODM[1];
+			for(int k=0; k<2; k++){
+				for(int l=0; l<2*N_BYTES; l++){
+					ar & i.lfC[k][l];
+				}
+			}
+		}}}
+
+// NTL::GF2
+namespace boost { namespace serialization {
+		template<class Archive> inline void serialize(Archive & ar, NTL::GF2 & t, const unsigned int file_version){
+			split_free(ar, t, file_version);
+		}
+		template<class Archive> void save(Archive & ar, const NTL::GF2 & t, unsigned int version)
+		{
+			char c = (char)rep(t);
+			ar & c; // rep returns long, space optimization, store as 1B (GF2 is boolean)
+		}
+		template<class Archive> void load(Archive & ar, NTL::GF2 & t, unsigned int version)
+		{
+			char cur = 0;
+			ar & cur;
+			t = (long)cur;
+		}
+	}}
+
+// NTL::mat_GF2
+namespace boost { namespace serialization {
+		template<class Archive> inline void serialize(Archive & ar, NTL::mat_GF2 & t, const unsigned int file_version){
+			split_free(ar, t, file_version);
+		}
+		template<class Archive> void save(Archive & ar, const NTL::mat_GF2 & t, unsigned int version)
+		{
+			long i, j, n = t.NumRows(), m = t.NumCols();
+			ar & n;
+			ar & m;
+
+			// Per-element serialization. Not very space-effective. Trivial implementation.
+			for(i=0; i<n; i++){
+				for(j=0; j<m; j++){
+					ar & t.get(i, j);
+				}
+			}
+		}
+		template<class Archive> void load(Archive & ar, NTL::mat_GF2 & t, unsigned int version)
+		{
+			long i, j, n, m;
+			NTL::GF2 cur;
+
+			ar & n;
+			ar & m;
+			t.SetDims(n, m);
+			for(i=0; i<n; i++){
+				for(j=0; j<m; j++){
+					ar & cur;
+					t.put(i, j, cur);
+				}
+			}
+		}
+	}}
+
+BOOST_CLASS_IMPLEMENTATION(struct _CODING4X4_TABLE, boost::serialization::object_serializable);
+BOOST_CLASS_IMPLEMENTATION(struct _MB_TABLE, boost::serialization::object_serializable);
+BOOST_CLASS_IMPLEMENTATION(struct _ExtEncoding, boost::serialization::object_serializable);
+BOOST_CLASS_IMPLEMENTATION(NTL::GF2, boost::serialization::object_serializable);
+BOOST_CLASS_IMPLEMENTATION(NTL::mat_GF2, boost::serialization::object_serializable);
+#endif
 
 #endif /* WBAESGENERATOR_H_ */
